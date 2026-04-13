@@ -23,9 +23,12 @@ setup(
         ],
     },
     entry_points={
-        'console_scripts': [
-            'gui_node = road_inspector.gui_node:main',
-        ],
-    },
+    'console_scripts': [
+        'gui_node = road_inspector.gui_node:main',
+        'navigation_node = road_inspector.navigation_node:main',
+        'camera_node = road_inspector.camera_node:main',
+        'check_camera = road_inspector.check_camera:main',
+    ],
+    }, 
 )
 

@@ -56,11 +56,15 @@ class GUINode(Node):
         # Subscribers
         self.create_subscription(String, '/damage/img_captured', self.image_callback, 10)
         self.create_subscription(String, '/road/final_report', self.report_callback, 10)
+        
+        self.get_logger().info("✅ GUI Node has been started.")
 
     def image_callback(self, msg):
+        self.get_logger().info(f"📸 Image received: {msg.data}")
         self.gui.image_signal.emit(msg.data)
 
     def report_callback(self, msg):
+        self.get_logger().info(f"📋 Final report received: {msg.data}")
         self.gui.report_signal.emit(msg.data)
 
 # ================= DASHBOARD UI =================
@@ -163,13 +167,18 @@ class Dashboard(QWidget):
 
         # Simple validation for Road Name and Numbers
         if not road or not d.replace('.','',1).isdigit() or not v.replace('.','',1).isdigit():
+            if self.node:
+                self.node.get_logger().warn("⚠️ Invalid input attempt on GUI.")
             self.status_label.setText("Status: Error! Check Inputs")
             self.status_label.setStyleSheet("color: #ff3333;")
             return
 
         msg = String()
         msg.data = f"{road},{d},{v}"
-        self.node.publisher_.publish(msg)
+        
+        if self.node:
+            self.node.get_logger().info(f"📤 Publishing mission: {msg.data}")
+            self.node.publisher_.publish(msg)
 
         # Lock UI
         self.clear_report()
