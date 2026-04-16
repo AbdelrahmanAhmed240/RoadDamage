@@ -28,6 +28,7 @@ setup(
         'navigation_node = road_inspector.navigation_node:main',
         'camera_node = road_inspector.camera_node:main',
         'check_camera = road_inspector.check_camera:main',
+        'fusion_node = road_inspector.fusion_node:main',
     ],
     }, 
 )

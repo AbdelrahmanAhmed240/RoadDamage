@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
 
+import sys
+import threading
+import os
+import json
+import time
+from datetime import datetime
+
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
@@ -7,8 +14,9 @@ from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 import cv2
 import requests
-import os
-import time
+
+# --- ADDED IMPORTS FOR QoS ---
+from rclpy.qos import QoSProfile, DurabilityPolicy 
 
 class CameraNode(Node):
     def __init__(self):
@@ -22,7 +30,21 @@ class CameraNode(Node):
         self.cap = None
         self.is_active = False
 
-        self.create_subscription(String, '/system/state', self.state_callback, 10)
+        # --- FIX: MATCHING QoS PROFILE ---
+        # This ensures the node receives the "ACTIVE" state even if it starts late
+        self.qos_profile = QoSProfile(
+            depth=10,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL
+        )
+
+        # Apply the qos_profile to the subscription
+        self.create_subscription(
+            String, 
+            '/system/state', 
+            self.state_callback, 
+            self.qos_profile
+        )
+        
         self.image_pub = self.create_publisher(Image, '/camera/image_raw', 10)
         self.ready_pub = self.create_publisher(String, '/camera/ready', 10)
 

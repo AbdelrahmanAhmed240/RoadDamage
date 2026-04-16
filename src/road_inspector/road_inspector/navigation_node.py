@@ -25,32 +25,24 @@ class NavigationNode(Node):
         # Pubs & Subs
         self.state_pub = self.create_publisher(String, '/system/state', self.state_qos)
         self.create_subscription(String, '/cmd_move', self.cmd_callback, 10)
-        self.pending_mission = None
         self.create_subscription(String, '/camera/ready', self.camera_ready_callback, 10)
-        
+        self.pending_mission = None
         self.get_logger().info(f"🚀 Mission Control Online. Target ESP: {self.esp32_ip}")
 
     def send_socket_command(self, message, travel_time):
         """
-        Handles TCP communication with the ESP32.
-        Includes a dynamic timeout to prevent node hanging.
+        Handles UDP communication with the ESP32.
         """
         try:
-            # Using a context manager ensures the socket closes even if it errors
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                # Add a 5-second buffer to the expected mission time
-                dynamic_timeout = travel_time + 5.0
-                s.settimeout(dynamic_timeout)
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.settimeout(travel_time + 2.0) # Wait long enough for mission to finish
                 
-                self.get_logger().info(f"📡 Connecting to ESP32... (Timeout: {dynamic_timeout:.1f}s)")
-                s.connect((self.esp32_ip, self.port))
+                self.get_logger().info(f"📡 Sending UDP: {message}")
+                s.sendto((message + "\n").encode('utf-8'), (self.esp32_ip, self.port))
                 
-                # Send command with newline for ESP32 readStringUntil('\n')
-                s.sendall((message + "\n").encode('utf-8'))
-                
-                # Wait for response
-                data = s.recv(1024).decode('utf-8').strip()
-                return data
+                # Receive 'FINISHED' from ESP32
+                data, addr = s.recvfrom(1024)
+                return data.decode('utf-8').strip()
         except socket.timeout:
             self.get_logger().error("🛑 Connection Timed Out: ESP32 did not respond in time.")
             return "TIMEOUT"
@@ -59,19 +51,17 @@ class NavigationNode(Node):
             return None
 
     def cmd_callback(self, msg):
-            # 1. Store the mission details instead of moving immediately
-            parts = msg.data.split(',')
-            if len(parts) < 3: return
-            
-            self.pending_mission = {
-                'road': parts[0],
-                'dist': float(parts[1]),
-                'vel': float(parts[2])
-            }
-            
-            # 2. Start the camera
-            self.get_logger().info(f"⏳ Mission {parts[0]} Queued. Waiting for Camera...")
-            self.publish_state("ACTIVE")
+        parts = msg.data.split(',')
+        if len(parts) < 3: return
+        
+        self.pending_mission = {
+            'road': parts[0],
+            'dist': float(parts[1]),
+            'vel': float(parts[2])
+        }
+        
+        self.get_logger().info(f"⏳ Mission {parts[0]} Queued. Waiting for Camera...")
+        self.publish_state("ACTIVE")
             
     def camera_ready_callback(self, msg):
         if msg.data == "READY" and self.pending_mission:
