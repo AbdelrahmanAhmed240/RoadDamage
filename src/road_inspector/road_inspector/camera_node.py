@@ -22,13 +22,14 @@ class CameraNode(Node):
     def __init__(self):
         super().__init__('camera_node')
 
-        self.phone_ip = "192.168.1.11"
+        self.phone_ip = "172.20.10.4"
         self.video_url = f"http://{self.phone_ip}:8080/video"
         self.api_url = f"http://{self.phone_ip}:8080/settings/video_recording?set="
 
         self.bridge = CvBridge()
         self.cap = None
         self.is_active = False
+        self.capture_thread = None # Added tracking for the thread
 
         # --- FIX: MATCHING QoS PROFILE ---
         # This ensures the node receives the "ACTIVE" state even if it starts late
@@ -75,21 +76,30 @@ class CameraNode(Node):
             os.system(f"adb shell input tap {target_x} {target_y}")
 
             # D. WAIT FOR NETWORK
-            # Instead of a flat sleep, we loop to find the connection ASAP
             connected = False
-            for i in range(10):  # Try for 5 seconds total
+            for i in range(15): 
                 self.get_logger().info(f"🔄 Connection attempt {i+1}...")
                 self.cap = cv2.VideoCapture(self.video_url)
                 if self.cap.isOpened():
-                    connected = True
-                    break
-                time.sleep(0.5)
+                    ret, _ = self.cap.read() 
+                    if ret:
+                        connected = True
+                        break
+                
+                if self.cap: self.cap.release()
+                time.sleep(1.0) 
 
             # E. CONNECT OPENCV
-            if connected:
-                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            if connected: 
+                # 1. Performance: Use MJPG and ZERO buffer to eliminate lag
+                self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 0) 
+                
                 self.is_active = True
-                self.timer = self.create_timer(0.033, self.publish_frame)
+                
+                # 2. BETTER FPS: Use a dedicated thread instead of a timer
+                self.capture_thread = threading.Thread(target=self.stream_loop, daemon=True)
+                self.capture_thread.start()
                 
                 # Signal Navigation Node to START MOVING
                 self.ready_pub.publish(String(data="READY"))
@@ -105,11 +115,27 @@ class CameraNode(Node):
         except Exception as e:
             self.get_logger().error(f"❌ Automation Error: {e}")
 
+    def stream_loop(self):
+        """Thread worker for highest FPS and lowest latency."""
+        while self.is_active and rclpy.ok():
+            ret, frame = self.cap.read()
+            if ret:
+                # Resize with NEAREST for speed; keeps BGR for AI accuracy
+                frame = cv2.resize(frame, (640, 480), interpolation=cv2.INTER_NEAREST)
+                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+
+                msg = self.bridge.cv2_to_imgmsg(frame, encoding="bgr8")
+                self.image_pub.publish(msg)
+            else:
+                time.sleep(0.001)
+
     def stop_camera_hardware(self):
         self.get_logger().info("💤 Stopping Camera...")
         self.is_active = False
-        if hasattr(self, 'timer'):
-            self.timer.cancel()
+        if self.capture_thread is not None:
+            self.capture_thread.join(timeout=1.0)
+            self.capture_thread = None
+
         if self.cap is not None:
             self.cap.release()
             self.cap = None
@@ -117,17 +143,6 @@ class CameraNode(Node):
             requests.get(self.api_url + "off", timeout=0.5)
         except:
             pass
-
-    def publish_frame(self):
-        if self.is_active and self.cap is not None:
-            ret, frame = self.cap.read()
-            if ret:
-                # Performance Fix: Resize to avoid network lag
-                frame = cv2.resize(frame, (640, 480))
-                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-
-                msg = self.bridge.cv2_to_imgmsg(frame, encoding="bgr8")
-                self.image_pub.publish(msg)
 
 def main(args=None):
     rclpy.init(args=args)

@@ -57,7 +57,7 @@ class GUINode(Node):
 
         # Subscribers
         self.create_subscription(String, '/damage/img_captured', self.image_callback, 10)
-        self.create_subscription(String, '/road/final_report', self.report_callback, 10)
+        self.create_subscription(String, '/road_damage/detections', self.report_callback, 10)
         
         self.get_logger().info("✅ GUI Node has been started.")
 
@@ -169,43 +169,56 @@ class Dashboard(QWidget):
 
     def update_report(self, json_string):
         try:
+            # Parse the new payload structure
             data = json.loads(json_string)
-            condition = data.get("road_condition", "N/A")
+            
+            damaged = data.get("damaged", False)
+            pothole_count = data.get("pothole_count", 0)
+            crack_count = data.get("crack_count", 0)
+            damage_percent = data.get("damage_percentage", 0)
+            correct_percent = data.get("correct_percentage", 100)
             severity = data.get("severity", "LOW").upper()
-            conf = data.get("confidence", 0.0)
-            balance = data.get("road_balance", "STABLE")
+            condition = data.get("road_condition", "Normal")
 
-            # Update Metrics
-            if severity == "HIGH":
-                self.graph.high += 1
-                self.score -= 20
-            elif severity == "MEDIUM":
-                self.graph.medium += 1
-                self.score -= 10
-            else:
-                self.graph.low += 1
-                self.score -= 5
-
+            # Update Analytics Graph based on severity
+            if damaged:
+                if severity == "HIGH":
+                    self.graph.high += 1
+                elif severity == "MEDIUM":
+                    self.graph.medium += 1
+                else:
+                    self.graph.low += 1
+            
+            # Update the Quality Index using your correct_percentage
+            self.score = correct_percent
             self.graph.update_graph()
             self.update_score_ui()
 
-            # Output to Report Box
+            # Output the specific data to the Report Box
             timestamp = datetime.now().strftime("%H:%M:%S")
             report_html = (
-                f"<p style='color:#1a73e8;'><b>[{timestamp}] MISSION COMPLETE</b></p>"
-                f"<p><b>FINAL VERDICT:</b> <span style='color:#ff3333;'>{condition}</span></p>"
-                f"<p><b>IMU BALANCE:</b> {balance}</p>"
-                f"<p><b>AI CONFIDENCE:</b> {conf*100:.1f}%</p>"
+                f"<p style='color:#1a73e8;'><b>[{timestamp}] DETECTION LOG</b></p>"
+                f"<p><b>STATUS:</b> <span style='color:{'#ff3333' if damaged else '#00ff88'};'>"
+                f"{'DAMAGED' if damaged else 'CLEAR'}</span></p>"
+                f"<p><b>DETAILS:</b> {condition}</p>"
+                f"<p><b>POTHOLES:</b> {pothole_count} | <b>CRACKS:</b> {crack_count}</p>"
+                f"<p><b>DAMAGE AREA:</b> {damage_percent}%</p>"
                 f"<p><b>SEVERITY:</b> {severity}</p>"
                 f"<hr style='border: 0.5px solid #333;'>"
             )
+            
             self.report_box.append(report_html)
-            self.status_label.setText("Status: Report Generated")
-            self.start_button.setEnabled(True)
+            
+            # Auto-scroll to bottom
+            self.report_box.verticalScrollBar().setValue(
+                self.report_box.verticalScrollBar().maximum()
+            )
+            
+            self.status_label.setText(f"Status: {severity} Damage Detected" if damaged else "Status: Road Clear")
 
         except Exception as e:
             self.report_box.append(f"<p style='color:red;'>Error parsing report: {e}</p>")
-
+            
     def update_score_ui(self):
         self.score = max(0, self.score)
         color = "#00ff88" if self.score > 70 else "#ffaa00" if self.score > 40 else "#ff3333"
