@@ -51,18 +51,26 @@ class NavigationNode(Node):
             return None
 
     def cmd_callback(self, msg):
-        parts = msg.data.split(',')
-        if len(parts) < 3: return
-        
-        self.pending_mission = {
-            'road': parts[0],
-            'dist': float(parts[1]),
-            'vel': float(parts[2])
-        }
-        
-        self.get_logger().info(f"⏳ Mission {parts[0]} Queued. Waiting for Camera...")
-        self.publish_state("ACTIVE")
+        try:
+            parts = msg.data.split(',')
+            if len(parts) < 3: 
+                return
             
+            # This is where the crash happened - wrapped in try/except now
+            self.pending_mission = {
+                'road': parts[0],
+                'dist': float(parts[1]),
+                'vel': float(parts[2])
+            }
+            
+            self.get_logger().info(f"⏳ Mission {parts[0]} Queued. Waiting for Camera...")
+            self.publish_state("ACTIVE")
+            
+        except ValueError:
+            self.get_logger().error(f"❌ Invalid command received: '{msg.data}'. Distance/Velocity must be numbers.")
+        except Exception as e:
+            self.get_logger().error(f"❌ Error in cmd_callback: {e}")
+                
     def camera_ready_callback(self, msg):
         if msg.data == "READY" and self.pending_mission:
             mission = self.pending_mission

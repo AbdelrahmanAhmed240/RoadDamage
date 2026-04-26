@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
-
 import sys
 import threading
 import os
-import json
 import time
-from datetime import datetime
-
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
@@ -14,42 +10,26 @@ from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 import cv2
 import requests
-
-# --- ADDED IMPORTS FOR QoS ---
 from rclpy.qos import QoSProfile, DurabilityPolicy 
 
 class CameraNode(Node):
     def __init__(self):
         super().__init__('camera_node')
 
-        self.phone_ip = "172.20.10.4"
+        self.phone_ip = "192.168.1.11"
         self.video_url = f"http://{self.phone_ip}:8080/video"
         self.api_url = f"http://{self.phone_ip}:8080/settings/video_recording?set="
 
         self.bridge = CvBridge()
         self.cap = None
         self.is_active = False
-        self.capture_thread = None # Added tracking for the thread
+        self.capture_thread = None
 
-        # --- FIX: MATCHING QoS PROFILE ---
-        # This ensures the node receives the "ACTIVE" state even if it starts late
-        self.qos_profile = QoSProfile(
-            depth=10,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL
-        )
+        self.qos_profile = QoSProfile(depth=10, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
-        # Apply the qos_profile to the subscription
-        self.create_subscription(
-            String, 
-            '/system/state', 
-            self.state_callback, 
-            self.qos_profile
-        )
-        
+        self.create_subscription(String, '/system/state', self.state_callback, self.qos_profile)
         self.image_pub = self.create_publisher(Image, '/camera/image_raw', 10)
         self.ready_pub = self.create_publisher(String, '/camera/ready', 10)
-
-        self.get_logger().info("📷 Camera Node Initialized. Waiting for ACTIVE state...")
 
     def state_callback(self, msg):
         if msg.data == "ACTIVE" and not self.is_active:
@@ -58,85 +38,66 @@ class CameraNode(Node):
             self.stop_camera_hardware()
 
     def start_camera_hardware(self):
-        self.get_logger().info("🚀 High-Speed Launch Initialized...")
         try:
-            # A. Launch App
             os.system("adb shell monkey -p com.pas.webcam -c android.intent.category.LAUNCHER 1")
             time.sleep(1.2)
 
-            # B. FAST TRIPLE FLICK
-            os.system("adb shell input swipe 540 1800 540 100 100")
-            os.system("adb shell input swipe 540 1800 540 100 100")
-            os.system("adb shell input swipe 540 1800 540 100 100")
+            for _ in range(3):
+                os.system("adb shell input swipe 540 1800 540 100 100")
             time.sleep(0.8)
 
-            # C. THE CLICK
-            target_x = 540
-            target_y = 2000 
-            os.system(f"adb shell input tap {target_x} {target_y}")
+            os.system("adb shell input tap 540 2000")
 
-            # D. WAIT FOR NETWORK
             connected = False
-            for i in range(15): 
-                self.get_logger().info(f"🔄 Connection attempt {i+1}...")
+            for _ in range(15):
                 self.cap = cv2.VideoCapture(self.video_url)
                 if self.cap.isOpened():
-                    ret, _ = self.cap.read() 
+                    ret, _ = self.cap.read()
                     if ret:
                         connected = True
                         break
-                
-                if self.cap: self.cap.release()
-                time.sleep(1.0) 
+                if self.cap:
+                    self.cap.release()
+                time.sleep(1)
 
-            # E. CONNECT OPENCV
-            if connected: 
-                # 1. Performance: Use MJPG and ZERO buffer to eliminate lag
-                self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 0) 
-                
+            if connected:
+                # Request better resolution
+                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
                 self.is_active = True
-                
-                # 2. BETTER FPS: Use a dedicated thread instead of a timer
                 self.capture_thread = threading.Thread(target=self.stream_loop, daemon=True)
                 self.capture_thread.start()
-                
-                # Signal Navigation Node to START MOVING
+
                 self.ready_pub.publish(String(data="READY"))
-                self.get_logger().info("✅ Camera Ready. Signal sent to Navigation.")
-                
+
                 try:
-                    requests.get(self.api_url + "on", timeout=1.0)
+                    requests.get(self.api_url + "on", timeout=1)
                 except:
                     pass
-            else:
-                self.get_logger().error("❌ Stream unreachable after retries.")
-
         except Exception as e:
-            self.get_logger().error(f"❌ Automation Error: {e}")
+            self.get_logger().error(str(e))
 
     def stream_loop(self):
-        """Thread worker for highest FPS and lowest latency."""
         while self.is_active and rclpy.ok():
             ret, frame = self.cap.read()
             if ret:
-                # Resize with NEAREST for speed; keeps BGR for AI accuracy
-                frame = cv2.resize(frame, (640, 480), interpolation=cv2.INTER_NEAREST)
                 frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
 
-                msg = self.bridge.cv2_to_imgmsg(frame, encoding="bgr8")
-                self.image_pub.publish(msg)
+                h, w = frame.shape[:2]
+                scale = 720 / h
+                frame = cv2.resize(frame, (int(w * scale), 720))
+
+                self.image_pub.publish(self.bridge.cv2_to_imgmsg(frame, "bgr8"))
             else:
                 time.sleep(0.001)
 
     def stop_camera_hardware(self):
-        self.get_logger().info("💤 Stopping Camera...")
         self.is_active = False
-        if self.capture_thread is not None:
-            self.capture_thread.join(timeout=1.0)
+        if self.capture_thread:
+            self.capture_thread.join(timeout=1)
             self.capture_thread = None
-
-        if self.cap is not None:
+        if self.cap:
             self.cap.release()
             self.cap = None
         try:
@@ -149,8 +110,6 @@ def main(args=None):
     node = CameraNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
     finally:
         node.stop_camera_hardware()
         node.destroy_node()
